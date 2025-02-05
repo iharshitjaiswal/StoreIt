@@ -5,7 +5,9 @@ const nextConfig: NextConfig = {
     serverActions:{
       bodySizeLimit:"1000MB"
     }
-  },
+
+  },    reactStrictMode: true,
+
   images:{
     domains: ["img.freepik.com"], // Add the external hostname here
 

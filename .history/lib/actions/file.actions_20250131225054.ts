@@ -1,0 +1,167 @@
+'use server'
+
+import { ID, Models, Query } from "node-appwrite";
+import { createAdminClient } from "@/lib/appwrite"
+import {InputFile} from "node-appwrite/file"
+import { appwriteConfig } from "../appwrite/config";
+import { constructFileUrl, getFileType, parseStringify } from "../utils";
+import { revalidatePath } from "next/cache";
+import { getCurrentUser } from "./user.actions";
+import { useEffect, useState } from "react";
+
+const [currentUser, setCurrentUser] = useState<{ email: string; isAdmin: boolean } | null>(null);
+
+useEffect(() => {
+    const fetchUser = async () => {
+      try {
+        const user = await getCurrentUser();
+        if (user) {
+          setCurrentUser({ email: user.email, isAdmin: user.role === "admin" }); // Adjust if role is stored differently
+        }
+      } catch (error) {
+        console.error("Failed to fetch user:", error);
+      }
+    };
+  
+    fetchUser();
+  }, []);
+
+const handleError = (error: unknown, message: string) => {
+    console.log(error, message);
+    throw error;
+  };
+
+export const  uploadFile = async({file,ownerId,accountId,path,}:UploadFileProps)=>{
+    const {storage,databases} = await createAdminClient();
+
+    try {
+        const inputFile = InputFile.fromBuffer(file,file.name);
+
+        const bucketFile = await storage.createFile(appwriteConfig.bucketId,ID.unique(),inputFile,);
+        
+        const fileDocument = {
+            type: getFileType(bucketFile.name).type,
+            name:bucketFile.name,
+             url:constructFileUrl(bucketFile.$id),
+            extension: getFileType(bucketFile.name).extension,
+            size:bucketFile.sizeOriginal,
+            owner:ownerId,
+            accountId,
+            users:[],
+            bucketFileId:bucketFile.$id,
+        }
+
+        const newFile = await databases.createDocument(
+            appwriteConfig.databaseId,
+            appwriteConfig.filesCollectionId,
+            ID.unique(),
+            fileDocument,
+            )
+            .catch(async(error:unknown)=>{
+                await storage.deleteFile(appwriteConfig.bucketId,bucketFile.$id);
+                handleError(error,"Failsed to create file document");
+            });
+
+        revalidatePath(path);
+        return parseStringify(newFile);
+
+    } catch (error) {
+        handleError(error,"Failed to upload file");
+    }
+};
+
+const createQueries = (currentUser:Models.Document)=>{
+    const queries =[
+        Query.or([
+            Query.equal('owner',[currentUser.$id]),
+            Query.contains('users',[currentUser.email])
+        ])
+    ];
+
+    return queries;
+}
+export const getFiles = async () =>{
+    const {databases} = await createAdminClient();
+    try {
+        const currentUser = await getCurrentUser()
+
+        if(!currentUser) throw new Error("User not found");
+        const queries = createQueries(currentUser);
+
+        console.log({currentUser,queries});
+        
+        const files = await databases.listDocuments(
+            appwriteConfig.databaseId,
+            appwriteConfig.filesCollectionId,
+            queries,
+        );
+        console.log({files});
+        
+        return parseStringify(files)
+    } catch (error) {
+        handleError(error,"Failed to get files");
+    }
+}
+
+export const renameFile = async ({fileId,name,extension,path}:RenameFileProps)=>{
+    const {databases} = await createAdminClient();
+
+    try {
+        const newName = `${name}.${extension}`;
+        const updateFile = await databases.updateDocument(
+            appwriteConfig.databaseId,
+            appwriteConfig.filesCollectionId,
+            fileId,
+            {
+                name:newName,
+            },
+        );
+        revalidatePath(path);
+        return parseStringify(updateFile);
+    } catch (error) {
+        handleError(error, "Failed to rename file");
+    }
+}
+
+
+export const updateFileUsers = async ({ fileId, emails, path }: UpdateFileUsersProps) => {
+    const { databases, account } = await createAdminClient();
+
+    try {
+        // Get the current logged-in user
+        const user = await account.get();
+
+        // Fetch the current file details
+        const file = await databases.getDocument(
+            appwriteConfig.databaseId,
+            appwriteConfig.filesCollectionId,
+            fileId
+        );
+
+        // Ensure the user cannot remove themselves
+        if (file.users.includes(user.email) && !emails.includes(user.email)) {
+            throw new Error("You cannot remove yourself from this file.");
+        }
+
+        // Ensure only admins can add new users
+        if (!user.isAdmin) {
+            throw new Error("Only admins can share this file.");
+        }
+
+        // Proceed with updating the file's users
+        const updateFile = await databases.updateDocument(
+            appwriteConfig.databaseId,
+            appwriteConfig.filesCollectionId,
+            fileId,
+            {
+                users: emails,
+            }
+        );
+
+        revalidatePath(path);
+        return parseStringify(updateFile);
+    } catch (error) {
+        handleError(error, "Failed to update file users");
+    }
+};
+

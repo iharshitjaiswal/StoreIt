@@ -1,12 +1,12 @@
 "use server";
 
 import { createAdminClient, createSessionClient } from "@/lib/appwrite";
+import { InputFile } from "node-appwrite/dist/inputFile";
 import { appwriteConfig } from "@/lib/appwrite/config";
 import { ID, Models, Query } from "node-appwrite";
 import { constructFileUrl, getFileType, parseStringify } from "@/lib/utils";
 import { revalidatePath } from "next/cache";
 import { getCurrentUser } from "@/lib/actions/user.actions";
-import { DeleteFileProps, FileType, GetFilesProps, RenameFileProps, UpdateFileUsersProps, UploadFileProps } from "@/types";
 
 const handleError = (error: unknown, message: string) => {
   console.log(error, message);
@@ -22,7 +22,7 @@ export const uploadFile = async ({
   const { storage, databases } = await createAdminClient();
 
   try {
-    const inputFile = new File([file], file.name, { type: file.type });
+    const inputFile = InputFile.fromBuffer(file, file.name);
 
     const bucketFile = await storage.createFile(
       appwriteConfig.bucketId,
